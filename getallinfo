@@ -1,0 +1,231 @@
+#!/bin/bash
+
+function getmdinfo()
+{
+    cat /proc/mdstat | grep md | sed -r 's,\[[0-9]+\],,g' | awk '{
+	for (i=5; i<=NF; i++) {
+	    printf("%s %s\n", $1, $i)
+	}
+    }' | /usr/bin/sort
+}
+
+function getpvinfo()
+{
+    /sbin/pvs --noheading | awk '{print $2 " " $1}' | sed 's,/dev/,,g' | 
+	grep -e "^vg" | /usr/bin/sort
+}
+
+function getltinfo()
+{
+    cat /proc/net/iet/volume | awk ' { print $1 " " $NF }' |
+	awk -v FS="[:| ]" 'BEGIN {t=""; l=""}
+	{
+	    if ($1 == "tid") {
+		t = $2
+	    } else if ($1 == "lun") {
+		l = $2
+		d = $NF
+		print "T:" t ":L:" l " " d
+	    }
+	}' | sed 's,/dev/,,g'
+}
+
+function getfsinfo()
+{
+    mount | grep '/dev/sd' | awk '{print $3 " " $1}' | sed 's,/dev/,,g'
+}
+
+function getlvinfo()
+{
+    /sbin/lvs --noheadings | awk '{ print $2 "/" $1}'
+}
+
+function volusage()
+{
+    getdskusage $1 | 
+	awk '{
+	    for (i=1; i < NF; i++) {
+		printf("%s|", $i)
+	    }
+	    print $NF
+	}'
+}
+
+function getallvols()
+{
+    /sbin/fdisk -l 2> /dev/null | grep "Disk /dev" |
+	awk -v FS="[ |:|,]+" '{
+	    if ($2 ~ "/dev/sd") {
+		cmd = "/usr/bin/sg_inq " $2 "| grep \"Product id\""
+		cmd | getline inq
+		gsub(" Product identification: ", "", inq)
+	    } else {
+		inq = "MD"
+	    }
+	    cmd = "bash -c \". /usr/lib/cgi-bin/getallinfo; volusage " $2 "\""
+	    cmd | getline vinfo
+	    print $2 "|" inq "|" $3 "|" vinfo
+	}' | sed 's,/dev/,,g'
+    /sbin/lvs --noheadings --units M --nosuffix |
+	awk '{
+	    lvol = $2 "/" $1
+	    cmd = "bash -c \". /usr/lib/cgi-bin/getallinfo; volusage " lvol "\""
+	    cmd | getline vinfo
+	    print lvol "|LV|" int($4) "|" vinfo
+	}'
+}
+
+function getallvolsxml()
+{
+    echo "Content-Type: text/html"
+    echo ""
+    echo '<?xml version="1.0" encoding="utf-8"?>'
+    echo '<volinfo>'
+    getallvols | /usr/bin/sort -t "|" -k 5 | 
+	awk -v FS="|" '{
+	    print "<vol volid=\"" $1 "\">"
+	    print "<name>" $1 "</name>"
+	    print "<inq>" $2 "</inq>"
+	    print "<cap>" $3 "</cap>"
+	    print "<usage>" $4 "</usage>"
+	    print "<usedby>" $5 "</usedby>"
+	    print "</vol>"
+	}'
+    echo '</volinfo>'
+}
+
+function chksecond()
+{
+    awk -v av=$1 '{
+	if ($2 ~ av) {
+	    print $1
+	}
+    }'
+}
+
+function getallcomps()
+{
+    cat /etc/initiators.all | awk '{
+	if ($1 !~ "#") {
+	    print (($2 == "") ? $1 : $2) "|" $1 "|XX|" "CP"
+	}
+    }'
+}
+
+function tltotid()
+{
+    local tlarr=(`echo $1 | awk -v FS=":" '{print $2 " " $4}'`)
+    cat /proc/net/iet/volume | grep "tid:${tlarr[0]}" | 
+	awk -v FS=":" '{print $NF}'
+}
+
+function iptocomp()
+{
+    cat /etc/initiators.all | awk -v ip=$1 '{
+	if ($1 !~ "#") {
+	    if (ip == $1) {
+		print $2
+	    }
+	}
+    }'
+}
+
+function tltocomp()
+{
+    local tid=`tltotid $1`
+    cat /etc/initiators.allow | awk -v FS="[ |,|:]" -v tid=$tid '{
+	if ($1 !~ "#") {
+	    if ($2 == tid) {
+		str=""
+		for (i = 3; i <=NF; i++) {
+		    if ($i != "") {
+			cmd = "bash -c \". /usr/lib/cgi-bin/getallinfo; iptocomp " $i "\""
+			cmd | getline comp
+			if (comp == "") {
+			    comp = $i
+			}
+			if (str != "") {
+			    str = str "|" comp
+			} else {
+			    str = comp
+			}
+		    }
+		}
+		if (str != "") {
+		    print str
+		}
+	    }
+	}
+    }'
+}
+
+function getvolcomps()
+{
+    getltinfo | awk '{
+	cmd = "bash -c \". /usr/lib/cgi-bin/getallinfo; tltocomp " $1 "\""
+	cmd | getline comp
+	print $2 "|" $1 "|" comp
+    }'
+}
+
+function getcompaccess()
+{
+    cat /etc/initiators.allow | awk -v FS="[ |,|\t]+" -v init=$1 '{
+	for (i = 2; i <= NF; i++) {
+	    if ($i == init) {
+		print $1
+		break
+	    }
+	}
+    }'
+}
+
+function getdskusage()
+{
+    dsk=`echo $1 | sed 's,/dev/,,g'`
+    dskmd=`getmdinfo | chksecond $dsk`
+    if [ -n "$dskmd" ]
+    then
+	echo "MD $dskmd"
+	exit
+    fi
+    dskpv=`getpvinfo | chksecond $dsk`
+    if [ -n "$dskpv" ]
+    then
+	echo "VG $dskpv"
+	exit
+    fi
+    dsklt=`getltinfo | chksecond $dsk`
+    if [ -n "$dsklt" ]
+    then
+	echo "LT $dsklt"
+	exit
+    fi
+    dskfs=`getfsinfo | chksecond $dsk`
+    if [ -n "$dskfs" ]
+    then
+	echo "FS $dskfs"
+	exit
+    fi
+    echo "UN $dsk"
+}
+
+function getuncnvols()
+{
+    getallvols | awk -v FS="|" '{
+	if ($4 == "UN") {
+	    print $0
+	} else if ($4 == "LT") {
+	    outstr = $1 "|" $2 "|" $3 "|CN"
+	    cmd = "bash -c \". /usr/lib/cgi-bin/getallinfo; tltocomp " $NF "\""
+	    cmd | getline comp
+	    print outstr "|" comp
+	}
+    }'
+}
+
+function dumpcompvolinfo()
+{
+    getuncnvols 
+    getallcomps 
+}

@@ -1,0 +1,86 @@
+#!/bin/bash
+. ./getallinfo
+
+function createcpdiskhtml()
+{
+    awk -v FS="|" 'BEGIN {
+	print "Content-Type: text/html"
+	print ""
+	print "<html>"
+	print "<head>"
+	print "<script src=\"/jscripts/prototype.js\" type=\"text/javascript\"></script>"
+	print "<script src=\"/jscripts/scriptaculous.js\" type=\"text/javascript\"></script>"
+	print "<script src=\"/jscripts/disks.js\" type=\"text/javascript\"></script>"
+	print "<link rel=\"stylesheet\" href=\"/css/disks.css\" type=\"text/css\"/>"
+	print "</head>"
+	print "<body>"
+	print "<div id=\"unassigned\" class=\"disks\">"
+	print "Unassigned Disks"
+	print "<hr/>"
+    }
+    {
+	if ($4 == "UN") {
+	    print "<div id=\"" $1 "\" class=\"dsk\" title=\"" $2 ":" $3 "\">"
+	    print "<img src=\"/images/disk.png\"/>"
+	    print $1
+	    print "</div>"
+	    print "<script =\"text/javascript\">"
+	    print "new Draggable(\"" $1 "\", {revert: true, ghosting: true});"
+	    print "Droppables.add(\"" $1 "\", {accept: \"dsk\", onDrop: dskOnDskHandler});"
+	    print "</script>"
+	} else if ($4 == "CN") {
+	    for (i = 0;;i++) {
+		cpstr = $NF "_" i
+		if (cpstr in cnlist) {
+		} else {
+		    cnlist[ cpstr ] = $1 ":" $2 ":" $3
+		    break
+		}
+	    }
+	} else if ($4 == "CP") {
+	    cplist[ $1 ] = $2
+	}
+    }
+    END {
+	print "</div>"
+	print "<script type=\"text/javascript\">"
+	print "Droppables.add(\"unassigned\", {accept: \"dsk\", onDrop: dskDropHandler});"
+	print "</script>"
+	print "<div class=\"comps\">"
+	for (cp in cplist) {
+	    #print cplist[cp]
+	    print "<div id=\"" cp "\" class=\"comp\" title=\"" cplist[cp] "\">"
+	    print cp
+	    print "<br/>"
+	    print "<img src=\"/images/Computer.png\" />"
+	    for (i = 0;;i++) {
+		cpstr = cp "_" i
+		if (cpstr in cnlist) {
+		    #print "CN:" cnlist[cpstr]
+		    split(cnlist[cpstr], arr, ":")
+		    print "<div id=\"" arr[1] "\" class=\"dsk\" title=\"" arr[2] ":" arr[3] "\">"
+		    print "<img src=\"/images/disk.png\"/>"
+		    print arr[1]
+		    print "</div>"
+		    print "<script =\"text/javascript\">"
+		    print "new Draggable(\"" arr[1] "\", {revert: true, ghosting: true});"
+		    print "Droppables.add(\"" arr[1] "\", {accept: \"dsk\", onDrop: dskOnDskHandler});"
+		    print "</script>"
+		} else {
+		    break
+		}
+	    }
+	    print "<script type=\"text/javascript\">"
+	    print "Droppables.add(\"" cp "\", {accept: \"dsk\", onDrop: dskDropHandler});"
+	    print "</script>"
+	    print "</div>"
+	}
+	print "</div>"
+	print "<div id=\"debug_div\">"
+	print "</div>"
+	print "</body>"
+	print "</html>"
+    }'
+}
+
+dumpcompvolinfo | createcpdiskhtml
